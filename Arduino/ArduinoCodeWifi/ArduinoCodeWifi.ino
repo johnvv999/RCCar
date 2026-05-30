@@ -31,7 +31,11 @@ ArduinoLEDMatrix matrix;
 enum Motion { M_STOP, M_FWD, M_REV };
 Motion currentMotion = M_STOP;
 int currentSpeed = 0;          // 0..255 PWM
-int currentSpeedPct = 0;       // 0..100, for display
+int currentSpeedPct = 0;       // actual current speed 0..100
+int targetSpeedPct = 0;        // requested target speed 0..100
+unsigned long lastSpeedStep = 0;
+const unsigned long SPEED_STEP_MS = 40;
+const int SPEED_STEP_PCT = 2;
 
 // ── Display Helper ────────────────────────────────────────────
 void showCommand(const char* text) {
@@ -89,8 +93,10 @@ String buildPage() {
   html += "body { font-family: Arial; text-align: center; background: #1a1a2e; color: white; margin: 0; padding: 20px; }";
   html += "h1 { color: #00d4ff; margin-bottom: 5px; }";
   html += ".subtitle { color: #aaa; font-size: 13px; margin-bottom: 20px; }";
-  html += ".grid { display: inline-grid; grid-template-columns: repeat(3, 90px); grid-template-rows: repeat(3, 90px); gap: 8px; margin: 10px auto; }";
-  html += ".btn { width: 90px; height: 90px; font-size: 13px; font-weight: bold; background: #16213e; border: 2px solid #00d4ff; border-radius: 12px; color: white; cursor: pointer; text-decoration: none; display: flex; align-items: center; justify-content: center; flex-direction: column; line-height: 1.3; }";
+  html += ".grid { display: inline-grid; grid-template-columns: repeat(3, 96px); grid-template-rows: repeat(3, 96px); gap: 6px; margin: 10px auto; }";
+  html += ".btn { width: 96px; height: 96px; font-size: 11px; font-weight: bold; padding: 6px; background: #16213e; border: 2px solid #00d4ff; border-radius: 12px; color: white; cursor: pointer; text-decoration: none; display: flex; align-items: center; justify-content: center; flex-direction: column; line-height: 1.1; box-sizing: border-box; white-space: normal; }";
+  html += ".dir-btn { font-size: 9px; }";
+  html += ".btn span { display: block; width: 100%; }";
   html += ".btn:active { background: #00d4ff; color: #1a1a2e; }";
   html += ".icon { font-size: 22px; }";
   html += ".stop-btn { background: #e94560; border-color: #e94560; }";
@@ -104,21 +110,21 @@ String buildPage() {
   html += "<h1>&#x1F697; Car Control</h1>";
   html += "<div class='subtitle'>Tap buttons to drive</div>";
   html += "<div class='grid'>";
-  html += "<a class='btn' href='/fwd_left'><span class='icon'>&#x2196;</span><span>FWD LEFT</span></a>";
-  html += "<a class='btn' href='/forward'><span class='icon'>&#x25B2;</span><span>FORWARD</span></a>";
-  html += "<a class='btn' href='/fwd_right'><span class='icon'>&#x2197;</span><span>FWD RIGHT</span></a>";
+  html += "<a class='btn dir-btn' href='/fwd_left'><span class='icon'>&#x2196;</span><span>FWD LEFT</span></a>";
+  html += "<a class='btn dir-btn' href='/forward'><span class='icon'>&#x25B2;</span><span>FORWARD</span></a>";
+  html += "<a class='btn dir-btn' href='/fwd_right'><span class='icon'>&#x2197;</span><span>FWD RIGHT</span></a>";
   html += "<a class='btn' href='/left'><span class='icon'>&#x25C4;</span><span>STEER LEFT</span></a>";
   html += "<a class='btn stop-btn' href='/stop'><span class='icon'>&#x25A0;</span><span>STOP</span></a>";
   html += "<a class='btn' href='/right'><span class='icon'>&#x25BA;</span><span>STEER RIGHT</span></a>";
-  html += "<a class='btn' href='/rev_left'><span class='icon'>&#x2199;</span><span>REV LEFT</span></a>";
-  html += "<a class='btn' href='/reverse'><span class='icon'>&#x25BC;</span><span>REVERSE</span></a>";
-  html += "<a class='btn' href='/rev_right'><span class='icon'>&#x2198;</span><span>REV RIGHT</span></a>";
+  html += "<a class='btn dir-btn' href='/rev_left'><span class='icon'>&#x2199;</span><span>REV LEFT</span></a>";
+  html += "<a class='btn dir-btn' href='/reverse'><span class='icon'>&#x25BC;</span><span>REVERSE</span></a>";
+  html += "<a class='btn dir-btn' href='/rev_right'><span class='icon'>&#x2198;</span><span>REV RIGHT</span></a>";
   html += "</div>";
-  html += "<div class='speed-label'>&#x26A1; Speed: <span id='spdval'>";
-  html += currentSpeedPct;
+  html += "<div class='speed-label'>&#x26A1; Max. Motor Speed: <span id='spdval'>";
+  html += targetSpeedPct;
   html += "</span>%</div>";
   html += "<input id='spd' type='range' min='0' max='100' step='5' value='";
-  html += currentSpeedPct;
+  html += targetSpeedPct;
   html += "' oninput='document.getElementById(\"spdval\").innerText=this.value'";
   html += " onchange='fetch(\"/speed?v=\"+this.value)'>";
   html += "</body>";
@@ -174,12 +180,25 @@ void setup() {
 }
 
 // ── Show speed percent on matrix and log it to serial
-void showSpeed(int pct, const char* source) {
-  currentSpeedPct = pct;
-  currentSpeed = map(pct, 0, 100, 0, 255);
-  applyMotion();
+void updateMotorSpeed() {
+  unsigned long now = millis();
+  if (currentSpeedPct == targetSpeedPct) return;
+  if (now - lastSpeedStep < SPEED_STEP_MS) return;
+  lastSpeedStep = now;
 
-  Serial.print("CMD: SPEED ");
+  if (currentSpeedPct < targetSpeedPct) {
+    currentSpeedPct = min(currentSpeedPct + SPEED_STEP_PCT, targetSpeedPct);
+  } else {
+    currentSpeedPct = max(currentSpeedPct - SPEED_STEP_PCT, targetSpeedPct);
+  }
+  currentSpeed = map(currentSpeedPct, 0, 100, 0, 255);
+  if (currentMotion != M_STOP) applyMotion();
+}
+
+void showSpeed(int pct, const char* source) {
+  targetSpeedPct = pct;
+
+  Serial.print("CMD: MAX SPEED ");
   Serial.print(pct);
   Serial.print("% (via ");
   Serial.print(source);
@@ -205,6 +224,7 @@ void setSpeedTier(int pct, const char* name) {
 
 // ── Main Loop ─────────────────────────────────────────────────
 void loop() {
+  updateMotorSpeed();
 
   if (WiFi.status() != WL_AP_LISTENING && WiFi.status() != WL_AP_CONNECTED) {
     Serial.println("AP lost! Restarting...");
