@@ -1,0 +1,5 @@
+Android/
+Arduino/
+build/
+temp/
+node_modules/
