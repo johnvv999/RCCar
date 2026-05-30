@@ -35,7 +35,7 @@ int currentSpeedPct = 0;       // actual current speed 0..100
 int targetSpeedPct = 0;        // requested target speed 0..100
 unsigned long lastSpeedStep = 0;
 const unsigned long SPEED_STEP_MS = 40;
-const int SPEED_STEP_PCT = 2;
+const int SPEED_STEP_PCT = 5;
 
 // ── Display Helper ────────────────────────────────────────────
 void showCommand(const char* text) {
@@ -93,8 +93,8 @@ String buildPage() {
   html += "body { font-family: Arial; text-align: center; background: #1a1a2e; color: white; margin: 0; padding: 20px; }";
   html += "h1 { color: #00d4ff; margin-bottom: 5px; }";
   html += ".subtitle { color: #aaa; font-size: 13px; margin-bottom: 20px; }";
-  html += ".grid { display: inline-grid; grid-template-columns: repeat(3, 96px); grid-template-rows: repeat(3, 96px); gap: 6px; margin: 10px auto; }";
-  html += ".btn { width: 96px; height: 96px; font-size: 11px; font-weight: bold; padding: 6px; background: #16213e; border: 2px solid #00d4ff; border-radius: 12px; color: white; cursor: pointer; text-decoration: none; display: flex; align-items: center; justify-content: center; flex-direction: column; line-height: 1.1; box-sizing: border-box; white-space: normal; }";
+  html += ".grid { display: inline-grid; grid-template-columns: repeat(3, 108px); grid-template-rows: repeat(3, 108px); gap: 6px; margin: 10px auto; }";
+  html += ".btn { width: 108px; height: 108px; font-size: 10px; font-weight: bold; padding: 6px; background: #16213e; border: 2px solid #00d4ff; border-radius: 12px; color: white; cursor: pointer; text-decoration: none; display: flex; align-items: center; justify-content: center; flex-direction: column; line-height: 1.1; box-sizing: border-box; white-space: nowrap; }";
   html += ".dir-btn { font-size: 9px; }";
   html += ".btn span { display: block; width: 100%; }";
   html += ".btn:active { background: #00d4ff; color: #1a1a2e; }";
@@ -123,10 +123,9 @@ String buildPage() {
   html += "<div class='speed-label'>&#x26A1; Max. Motor Speed: <span id='spdval'>";
   html += targetSpeedPct;
   html += "</span>%</div>";
-  html += "<input id='spd' type='range' min='0' max='100' step='5' value='";
+  html += "<input id='spd' type='range' min='0' max='100' step='1' value='";
   html += targetSpeedPct;
-  html += "' oninput='document.getElementById(\"spdval\").innerText=this.value'";
-  html += " onchange='fetch(\"/speed?v=\"+this.value)'>";
+  html += "' oninput='document.getElementById(\"spdval\").innerText=this.value; fetch(\"/speed?v=\"+this.value)'>";
   html += "</body>";
   html += "</html>";
   return html;
@@ -211,7 +210,9 @@ void showSpeed(int pct, const char* source) {
 
 // ── Handle a speed query (e.g. "GET /speed?v=45 HTTP/1.1") ────
 void handleSpeed(const String& request, int idx) {
-  int start = idx + 13;  // length of "GET /speed?v="
+  int start = request.indexOf("speed?v=", idx);
+  if (start < 0) return;
+  start += 8;  // length of "speed?v="
   int end = request.indexOf(' ', start);
   if (end < 0) end = request.length();
   int pct = constrain(request.substring(start, end).toInt(), 0, 100);
@@ -220,6 +221,12 @@ void handleSpeed(const String& request, int idx) {
 
 void setSpeedTier(int pct, const char* name) {
   showSpeed(pct, name);
+}
+
+bool requestMatches(const String& request, const char* path) {
+  String getPath = String("GET ") + path;
+  String postPath = String("POST ") + path;
+  return request.indexOf(getPath) >= 0 || request.indexOf(postPath) >= 0;
 }
 
 // ── Main Loop ─────────────────────────────────────────────────
@@ -248,20 +255,25 @@ void loop() {
     }
   }
 
+  Serial.print("DEBUG: request=\"");
+  Serial.print(request);
+  Serial.println("\"");
+
   int idxSpeed;
   if      ((idxSpeed = request.indexOf("GET /speed?v=")) >= 0)  handleSpeed(request, idxSpeed);
-  else if (request.indexOf("GET /slow")      >= 0) { setSpeedTier(30, "SLOW"); }
-  else if (request.indexOf("GET /med")       >= 0) { setSpeedTier(55, "MED"); }
-  else if (request.indexOf("GET /fast")      >= 0) { setSpeedTier(80, "FAST"); }
-  else if (request.indexOf("GET /fwd_left")   >= 0) { driveForwardLeft();     announce("FWD LEFT",   "FL"); }
-  else if (request.indexOf("GET /fwd_right")  >= 0) { driveForwardRight();    announce("FWD RIGHT",  "FR"); }
-  else if (request.indexOf("GET /forward")    >= 0) { driveForwardStraight(); announce("FORWARD",    "FS"); }
-  else if (request.indexOf("GET /rev_left")   >= 0) { driveReverseLeft();     announce("REV LEFT",   "RL"); }
-  else if (request.indexOf("GET /rev_right")  >= 0) { driveReverseRight();    announce("REV RIGHT",  "RR"); }
-  else if (request.indexOf("GET /reverse")    >= 0) { driveReverseStraight(); announce("REVERSE",    "RV"); }
-  else if (request.indexOf("GET /left")       >= 0) { steerLeft();            announce("STEER LEFT", "L");  }
-  else if (request.indexOf("GET /right")      >= 0) { steerRight();           announce("STEER RGT",  "R");  }
-  else if (request.indexOf("GET /stop")       >= 0) { fullStop();             announce("STOP",       "ST"); }
+  else if ((idxSpeed = request.indexOf("POST /speed?v=")) >= 0)  handleSpeed(request, idxSpeed);
+  else if (requestMatches(request, "/slow"))  { setSpeedTier(30, "SLOW"); }
+  else if (requestMatches(request, "/med"))   { setSpeedTier(55, "MED"); }
+  else if (requestMatches(request, "/fast"))  { setSpeedTier(80, "FAST"); }
+  else if (requestMatches(request, "/fwd_left"))   { driveForwardLeft();     announce("FWD LEFT",   "FL"); }
+  else if (requestMatches(request, "/fwd_right"))  { driveForwardRight();    announce("FWD RIGHT",  "FR"); }
+  else if (requestMatches(request, "/forward"))    { driveForwardStraight(); announce("FORWARD",    "FS"); }
+  else if (requestMatches(request, "/rev_left"))   { driveReverseLeft();     announce("REV LEFT",   "RL"); }
+  else if (requestMatches(request, "/rev_right"))  { driveReverseRight();    announce("REV RIGHT",  "RR"); }
+  else if (requestMatches(request, "/reverse"))    { driveReverseStraight(); announce("REVERSE",    "RV"); }
+  else if (requestMatches(request, "/left"))       { steerLeft();            announce("STEER LEFT", "L");  }
+  else if (requestMatches(request, "/right"))      { steerRight();           announce("STEER RGT",  "R");  }
+  else if (requestMatches(request, "/stop"))       { fullStop();             announce("STOP",       "ST"); }
 
   client.println("HTTP/1.1 200 OK");
   client.println("Content-Type: text/html");
