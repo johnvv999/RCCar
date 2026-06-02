@@ -37,6 +37,17 @@ unsigned long lastSpeedStep = 0;
 const unsigned long SPEED_STEP_MS = 40;
 const int SPEED_STEP_PCT = 5;
 
+// ── Failsafe (deadman) ────────────────────────────────────────
+// If the controller stops contacting us (app pings ~1x/sec while connected),
+// assume the link is lost and stop the motor. Prevents runaway on WiFi loss.
+const unsigned long FAILSAFE_MS = 2500;
+unsigned long lastClientMs = 0;
+
+// ── WiFi RSSI Monitoring ──────────────────────────────────────
+int lastRSSI = 0;
+unsigned long lastRSSIReadMs = 0;
+const unsigned long RSSI_UPDATE_MS = 1000;  // Read RSSI every 1 second
+
 // ── Display Helper ────────────────────────────────────────────
 void showCommand(const char* text) {
   matrix.beginDraw();
@@ -176,6 +187,7 @@ void setup() {
   server.begin();
   Serial.println("Server started!");
   showCommand("AP");
+  lastClientMs = millis();
 }
 
 // ── Show speed percent on matrix and log it to serial
@@ -229,9 +241,38 @@ bool requestMatches(const String& request, const char* path) {
   return request.indexOf(getPath) >= 0 || request.indexOf(postPath) >= 0;
 }
 
+// ── WiFi RSSI Monitor ─────────────────────────────────────────
+void updateRSSI() {
+  unsigned long now = millis();
+  if (now - lastRSSIReadMs < RSSI_UPDATE_MS) return;
+  lastRSSIReadMs = now;
+
+  lastRSSI = WiFi.RSSI();
+  Serial.print("WiFi RSSI: ");
+  Serial.print(lastRSSI);
+  Serial.println(" dBm");
+}
+
+// ── Handle RSSI query (e.g. "GET /rssi HTTP/1.1") ────────────
+void handleRSSI(WiFiClient& client) {
+  client.print("HTTP/1.1 200 OK\r\n");
+  client.print("Content-Type: text/plain\r\n");
+  client.print("Connection: close\r\n");
+  client.print("\r\n");
+  client.print(lastRSSI);
+  client.stop();
+}
+
 // ── Main Loop ─────────────────────────────────────────────────
 void loop() {
   updateMotorSpeed();
+  updateRSSI();
+
+  // Failsafe: if we haven't heard from a client recently, stop the motor.
+  if (currentMotion != M_STOP && millis() - lastClientMs > FAILSAFE_MS) {
+    fullStop();
+    announce("FAILSAFE STOP", "!!");
+  }
 
   if (WiFi.status() != WL_AP_LISTENING && WiFi.status() != WL_AP_CONNECTED) {
     Serial.println("AP lost! Restarting...");
@@ -255,6 +296,9 @@ void loop() {
     }
   }
 
+  // Any contact from a client counts as keepalive for the failsafe.
+  if (request.length() > 0) lastClientMs = millis();
+
   Serial.print("DEBUG: request=\"");
   Serial.print(request);
   Serial.println("\"");
@@ -262,6 +306,7 @@ void loop() {
   int idxSpeed;
   if      ((idxSpeed = request.indexOf("GET /speed?v=")) >= 0)  handleSpeed(request, idxSpeed);
   else if ((idxSpeed = request.indexOf("POST /speed?v=")) >= 0)  handleSpeed(request, idxSpeed);
+  else if (requestMatches(request, "/rssi"))  { handleRSSI(client); return; }
   else if (requestMatches(request, "/slow"))  { setSpeedTier(30, "SLOW"); }
   else if (requestMatches(request, "/med"))   { setSpeedTier(55, "MED"); }
   else if (requestMatches(request, "/fast"))  { setSpeedTier(80, "FAST"); }
