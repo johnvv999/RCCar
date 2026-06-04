@@ -5,3 +5,4 @@ git push
 Write-Host "`n--- Verification ---`n"
 git status
 git log -1
+Pause
